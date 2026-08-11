@@ -1,5 +1,5 @@
 /** Default Amani assistant API. Override with `NEXT_PUBLIC_AMANI_CHAT_ENDPOINT`. */
-export const AMANI_DEFAULT_ENDPOINT = "https://assistant.electriclink.co.ke/amaco";
+export const AMANI_DEFAULT_ENDPOINT = "https://assistants.bonganasi.co.ke/amaco";
 
 /** Chat API URL — set via env or pass directly to the widget. */
 export function getAmaniChatEndpoint(override?: string): string {
