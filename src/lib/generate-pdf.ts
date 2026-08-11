@@ -60,6 +60,24 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+function pdfWorkerOptions(filename: string, margin = 8) {
+  return {
+    margin,
+    filename,
+    image: { type: "jpeg" as const, quality: 0.92 },
+    html2canvas: {
+      scale: 1.25,
+      useCORS: true,
+      allowTaint: true,
+      logging: false,
+      backgroundColor: "#ffffff",
+      scrollX: 0,
+      scrollY: -window.scrollY,
+    },
+    jsPDF: { unit: "mm" as const, format: "a4" as const, orientation: "portrait" as const },
+  };
+}
+
 /** Capture a DOM node and download it as a PDF (client-side). */
 export async function downloadElementAsPdf(
   element: HTMLElement,
@@ -78,27 +96,17 @@ export async function downloadElementAsPdf(
           options.filename ??
           `AMACO-Quotation-${new Date().toISOString().slice(0, 10)}.pdf`;
 
-        // Yield so the loading spinner can paint before heavy canvas work.
         await new Promise<void>((resolve) => {
           requestAnimationFrame(() => resolve());
         });
 
         await html2pdf()
           .set({
-            margin: options.margin ?? 8,
-            filename,
-            image: { type: "jpeg", quality: 0.92 },
+            ...pdfWorkerOptions(filename, options.margin ?? 8),
             html2canvas: {
-              scale: 1.25,
-              useCORS: true,
-              allowTaint: true,
-              logging: false,
-              backgroundColor: "#ffffff",
-              scrollX: 0,
-              scrollY: -window.scrollY,
+              ...pdfWorkerOptions(filename).html2canvas,
               windowWidth: clone.target.scrollWidth,
             },
-            jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
           })
           .from(clone.target)
           .save();
@@ -108,6 +116,65 @@ export async function downloadElementAsPdf(
   } finally {
     cleanupCaptureArtifacts(container);
   }
+}
+
+/** Capture a DOM node as a PDF Blob (for email upload). */
+export async function elementToPdfBlob(
+  element: HTMLElement,
+  options: PdfOptions = {},
+): Promise<Blob> {
+  let container: HTMLDivElement | null = null;
+
+  try {
+    return await withTimeout(
+      (async () => {
+        const html2pdf = (await import("html2pdf.js")).default;
+        const clone = createPrintClone(element);
+        container = clone.container;
+
+        const filename =
+          options.filename ??
+          `AMACO-Quotation-${new Date().toISOString().slice(0, 10)}.pdf`;
+
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+
+        const worker = html2pdf()
+          .set({
+            ...pdfWorkerOptions(filename, options.margin ?? 8),
+            html2canvas: {
+              ...pdfWorkerOptions(filename).html2canvas,
+              windowWidth: clone.target.scrollWidth,
+            },
+          })
+          .from(clone.target);
+
+        const blob = (await worker.outputPdf("blob")) as Blob;
+        return blob;
+      })(),
+      PDF_TIMEOUT_MS,
+    );
+  } finally {
+    cleanupCaptureArtifacts(container);
+  }
+}
+
+export function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== "string") {
+        reject(new Error("Could not encode PDF."));
+        return;
+      }
+      const base64 = result.includes(",") ? result.split(",")[1] : result;
+      resolve(base64 ?? "");
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("PDF encode failed."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 export function getQuotePdfFilename(prefix = "AMACO-Quotation"): string {

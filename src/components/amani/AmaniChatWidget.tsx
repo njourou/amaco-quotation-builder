@@ -2,21 +2,26 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { usePathname } from "next/navigation";
 import { Send, X } from "lucide-react";
 import { AmaniMessageBody } from "@/components/amani/AmaniMessageBody";
+import { AmaniPdfRunner, type AmaniPdfJobStatus } from "@/components/amani/AmaniPdfRunner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useQuotation } from "@/context/QuotationContext";
 import { cn } from "@/lib/utils";
-import { buildAmaniContext } from "@/lib/amani/context";
+import { buildAmaniFormState } from "@/lib/amani/context";
 import { sendAmaniMessage } from "@/lib/amani/client";
 import {
   AMANI_AVATAR_SRC,
   AMANI_WIDGET_TITLE,
   getAmaniChatEndpoint,
 } from "@/lib/amani/config";
-import type { AmaniMessage, AmaniPremium, AmaniHistoryTurn } from "@/lib/amani/types";
+import type {
+  AmaniMessage,
+  AmaniPremium,
+  AmaniHistoryTurn,
+  AmaniPdfRequest,
+} from "@/lib/amani/types";
 
 const AMANI_APOLOGY =
   "I'm sorry — I'm having a little trouble connecting right now. Please try again in a moment.";
@@ -70,7 +75,14 @@ function AmaniThinkingIndicator() {
 function createMessage(
   role: AmaniMessage["role"],
   content: string,
-  extras?: { premium?: AmaniPremium; toolUsed?: string },
+  extras?: {
+    premium?: AmaniPremium;
+    toolUsed?: string;
+    pdfUrl?: string;
+    emailTo?: string;
+    pdfStatus?: AmaniMessage["pdfStatus"];
+    pdfStatusText?: string;
+  },
 ): AmaniMessage {
   return {
     id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -79,6 +91,10 @@ function createMessage(
     createdAt: Date.now(),
     premium: extras?.premium,
     toolUsed: extras?.toolUsed,
+    pdfUrl: extras?.pdfUrl,
+    emailTo: extras?.emailTo,
+    pdfStatus: extras?.pdfStatus,
+    pdfStatusText: extras?.pdfStatusText,
   };
 }
 
@@ -141,20 +157,24 @@ function MessageBubble({
   if (isUser) {
     return (
       <div className="flex justify-end" data-role={message.role}>
-        <div className="max-w-[88%] rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm leading-relaxed text-primary-foreground shadow-sm">
-          <p className="whitespace-pre-wrap">{message.content}</p>
+        <div className="max-w-[min(88%,20rem)] min-w-0 rounded-2xl rounded-br-md bg-primary px-3.5 py-2.5 text-sm leading-relaxed text-primary-foreground shadow-sm sm:max-w-[88%]">
+          <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+            {message.content}
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex items-end gap-2" data-role={message.role}>
-      <AmaniAvatar size={28} className="mb-0.5" variant="inline" />
-      <div className="max-w-[calc(88%-2.25rem)] rounded-2xl rounded-bl-md border border-border/80 bg-card px-3.5 py-2.5 text-foreground shadow-sm">
+    <div className="flex min-w-0 items-end gap-2" data-role={message.role}>
+      <AmaniAvatar size={28} className="mb-0.5 shrink-0" variant="inline" />
+      <div className="min-w-0 max-w-[calc(100%-2.5rem)] flex-1 rounded-2xl rounded-bl-md border border-border/80 bg-card px-3.5 py-2.5 text-foreground shadow-sm sm:max-w-[calc(88%-2.25rem)] sm:flex-none">
         <AmaniMessageBody
           content={message.content}
           premium={message.premium}
+          pdfUrl={message.pdfUrl}
+          pdfStatusText={message.pdfStatusText}
           streaming={streaming}
           onStreamComplete={onStreamComplete}
           onStreamProgress={onStreamProgress}
@@ -175,7 +195,6 @@ function toHistoryTurns(messages: AmaniMessage[]): AmaniHistoryTurn[] {
 }
 
 export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
-  const pathname = usePathname();
   const { quotation } = useQuotation();
   const [open, setOpen] = useState(false);
   const [showPrompt, setShowPrompt] = useState(true);
@@ -185,6 +204,12 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const [pdfJob, setPdfJob] = useState<{
+    messageId: string;
+    request: AmaniPdfRequest;
+    emailTo?: string;
+    premium?: AmaniPremium;
+  } | null>(null);
 
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -223,30 +248,54 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
       if (!trimmed || loading || streamingMessageId) return;
 
       const userMessage = createMessage("user", trimmed);
-      let historyForApi: AmaniHistoryTurn[] = [];
 
-      setMessages((prev) => {
-        historyForApi = toHistoryTurns(
-          prev.filter((m) => m.role === "user" || m.role === "assistant"),
-        );
-        return [...prev, userMessage];
-      });
+      // Full conversation for the API — all rendered turns including this send.
+      const historyForApi = toHistoryTurns([
+        ...messages.filter((m) => m.role === "user" || m.role === "assistant"),
+        userMessage,
+      ]);
+
+      setMessages((prev) => [...prev, userMessage]);
       setInput("");
       setLoading(true);
 
       try {
-        const { reply, premium, tool_used } = await sendAmaniMessage(
+        const {
+          reply,
+          premium,
+          tool_used,
+          pdf_request,
+          pdf_url,
+          email_to,
+        } = await sendAmaniMessage(
           chatEndpoint,
           trimmed,
           historyForApi,
-          buildAmaniContext(pathname, quotation),
+          buildAmaniFormState(quotation),
         );
         const assistantMessage = createMessage("assistant", reply, {
           premium,
           toolUsed: tool_used,
+          pdfUrl: pdf_url,
+          emailTo: email_to,
+          pdfStatus: pdf_request ? "preparing" : undefined,
+          pdfStatusText: pdf_request
+            ? email_to
+              ? "Preparing PDF to email…"
+              : "Preparing PDF download…"
+            : undefined,
         });
         setStreamingMessageId(assistantMessage.id);
         setMessages((prev) => [...prev, assistantMessage]);
+
+        if (pdf_request) {
+          setPdfJob({
+            messageId: assistantMessage.id,
+            request: pdf_request,
+            emailTo: email_to,
+            premium,
+          });
+        }
       } catch {
         const apologyMessage = createMessage("assistant", AMANI_APOLOGY);
         setStreamingMessageId(apologyMessage.id);
@@ -255,7 +304,7 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
         setLoading(false);
       }
     },
-    [chatEndpoint, loading, streamingMessageId, pathname, quotation],
+    [chatEndpoint, loading, streamingMessageId, messages, quotation],
   );
 
   const handleSubmit = (event: React.FormEvent) => {
@@ -267,6 +316,27 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
     setStreamingMessageId(null);
   }, []);
 
+  const handlePdfStatus = useCallback(
+    (status: AmaniPdfJobStatus, text: string) => {
+      if (!pdfJob) return;
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.id === pdfJob.messageId
+            ? {
+                ...message,
+                pdfStatus: status,
+                pdfStatusText: text,
+              }
+            : message,
+        ),
+      );
+      if (status !== "preparing") {
+        setPdfJob(null);
+      }
+    },
+    [pdfJob],
+  );
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -277,16 +347,27 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
   return (
     <div
       className={cn(
-        "fixed right-4 z-50 flex flex-col items-end gap-3 no-print",
-        "bottom-[max(1rem,env(safe-area-inset-bottom))]",
+        "fixed z-50 flex flex-col items-end gap-2 no-print sm:gap-3",
+        "right-[max(0.75rem,env(safe-area-inset-right))]",
+        "bottom-[max(0.75rem,env(safe-area-inset-bottom))]",
+        "left-[max(0.75rem,env(safe-area-inset-left))] sm:left-auto",
         className,
       )}
     >
+      {pdfJob && (
+        <AmaniPdfRunner
+          request={pdfJob.request}
+          emailTo={pdfJob.emailTo}
+          premium={pdfJob.premium}
+          onStatus={handlePdfStatus}
+        />
+      )}
+
       {open && (
         <section
           id="amani-chat-panel"
           aria-label="Amani chat"
-          className="flex h-[min(520px,calc(100dvh-10.5rem))] w-[min(380px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-background shadow-2xl shadow-black/10"
+          className="flex h-[min(72dvh,560px)] w-full max-w-full flex-col overflow-hidden rounded-2xl border border-border/80 bg-background shadow-2xl shadow-black/10 sm:h-[min(520px,calc(100dvh-10.5rem))] sm:w-[min(380px,calc(100vw-2rem))]"
         >
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-primary/15 bg-gradient-to-r from-primary to-[#b81862] px-4 py-4 text-primary-foreground">
             <div className="flex min-w-0 items-center gap-3">
@@ -328,12 +409,12 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
             {loading && <AmaniThinkingIndicator />}
 
             {messages.length === 1 && !isReplying && (
-              <div className="flex flex-wrap gap-2 pt-1 pl-9">
+              <div className="flex flex-wrap gap-2 pt-1 pl-0 sm:pl-9">
                 {SUGGESTIONS.map((suggestion) => (
                   <button
                     key={suggestion}
                     type="button"
-                    className="rounded-full border border-border bg-muted/60 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent"
+                    className="max-w-full rounded-full border border-border bg-muted/60 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:border-primary/40 hover:bg-accent [overflow-wrap:anywhere]"
                     onClick={() => void send(suggestion)}
                   >
                     {suggestion}
@@ -373,9 +454,9 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
         </section>
       )}
 
-      <div className="relative flex flex-col items-end gap-2">
+      <div className="relative flex w-full flex-col items-end gap-2">
         {!open && showPrompt && (
-          <div className="animate-in fade-in slide-in-from-bottom-2 max-w-[220px] rounded-2xl rounded-br-sm border border-border/80 bg-card px-3.5 py-2.5 text-sm leading-snug text-foreground shadow-lg duration-300">
+          <div className="animate-in fade-in slide-in-from-bottom-2 mr-0 max-w-[min(220px,calc(100%-4.5rem))] rounded-2xl rounded-br-sm border border-border/80 bg-card px-3.5 py-2.5 text-sm leading-snug text-foreground shadow-lg duration-300 sm:max-w-[220px]">
             <p className="font-medium text-primary">Hi there!</p>
             <p className="text-muted-foreground">Need help with a quote? I&apos;m ready.</p>
           </div>
@@ -393,10 +474,15 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
             open && "ring-2 ring-primary/30 ring-offset-2 ring-offset-background",
           )}
         >
-          <AmaniAvatar size={72} showStatus={!open} variant="launcher" />
+          <span className="sm:hidden">
+            <AmaniAvatar size={60} showStatus={!open} variant="launcher" />
+          </span>
+          <span className="hidden sm:inline-flex">
+            <AmaniAvatar size={72} showStatus={!open} variant="launcher" />
+          </span>
           {open && (
-            <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
-              <X className="size-7 text-white" />
+            <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/35 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+              <X className="size-6 text-white sm:size-7" />
             </span>
           )}
         </button>

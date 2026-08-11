@@ -1,27 +1,9 @@
 import type { QuotationState } from "@/lib/types";
-import type { AmaniChatContext } from "./types";
 
-export function buildAmaniContext(
-  pathname: string,
+export function buildAmaniFormState(
   quotation?: QuotationState,
-): AmaniChatContext {
-  const context: AmaniChatContext = {
-    pathname,
-    url: typeof window !== "undefined" ? window.location.href : pathname,
-  };
-
-  const formState = buildFormState(quotation);
-  if (formState && Object.keys(formState).length > 0) {
-    context.formState = formState;
-  }
-
-  return context;
-}
-
-function buildFormState(
-  quotation?: QuotationState,
-): Record<string, unknown> | undefined {
-  if (!quotation?.schedules.length) return undefined;
+): Record<string, unknown> {
+  if (!quotation?.schedules.length) return {};
 
   const schedule =
     quotation.schedules.find((item) => item.id === quotation.activeScheduleId) ??

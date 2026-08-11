@@ -12,6 +12,10 @@ export interface AmaniMessage {
   createdAt: number;
   premium?: AmaniPremium;
   toolUsed?: string;
+  pdfUrl?: string;
+  emailTo?: string;
+  pdfStatus?: "idle" | "preparing" | "downloaded" | "emailed" | "error";
+  pdfStatusText?: string;
 }
 
 export interface AmaniPremiumLine {
@@ -31,10 +35,25 @@ export interface AmaniPremium {
   [key: string]: unknown;
 }
 
+export interface AmaniPdfHeader {
+  sn?: string;
+  date?: string;
+  proposer?: string;
+  location?: string;
+  occupation?: string;
+  intermediary?: string;
+}
+
+export interface AmaniPdfRequest {
+  filename?: string;
+  header: AmaniPdfHeader;
+  schedules: Record<string, unknown>[];
+}
+
 export interface AmaniChatRequest {
   message: string;
-  history?: AmaniHistoryTurn[];
-  context?: AmaniChatContext;
+  history: AmaniHistoryTurn[];
+  context?: Record<string, unknown>;
 }
 
 export interface AmaniChatContext {
@@ -47,4 +66,7 @@ export interface AmaniChatResponse {
   reply: string;
   premium?: AmaniPremium;
   tool_used?: string;
+  pdf_request?: AmaniPdfRequest;
+  pdf_url?: string;
+  email_to?: string;
 }
