@@ -24,11 +24,13 @@ export async function sendAmaniMessage(
   message: string,
   history: AmaniHistoryTurn[],
   context: Record<string, unknown>,
+  sessionId?: string | null,
 ): Promise<AmaniChatResponse> {
   const payload: AmaniChatRequest = {
     message,
     history,
     context,
+    ...(sessionId ? { session_id: sessionId } : {}),
   };
 
   const response = await fetch(endpoint, {

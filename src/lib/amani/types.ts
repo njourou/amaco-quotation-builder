@@ -54,6 +54,8 @@ export interface AmaniChatRequest {
   message: string;
   history: AmaniHistoryTurn[];
   context?: Record<string, unknown>;
+  /** Stable per-visitor id (localStorage) — server keys conversation memory by it. */
+  session_id?: string;
 }
 
 export interface AmaniChatContext {

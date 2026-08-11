@@ -11,6 +11,7 @@ import { useQuotation } from "@/context/QuotationContext";
 import { cn } from "@/lib/utils";
 import { buildAmaniFormState } from "@/lib/amani/context";
 import { sendAmaniMessage } from "@/lib/amani/client";
+import { getAmaniSessionId } from "@/lib/amani/session";
 import {
   AMANI_AVATAR_SRC,
   AMANI_WIDGET_TITLE,
@@ -214,6 +215,8 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const chatEndpoint = getAmaniChatEndpoint(endpoint);
+  // Stable per-visitor id — created once per browser, kept in localStorage.
+  const sessionIdRef = useRef<string | null>(getAmaniSessionId());
   const isReplying = loading || streamingMessageId !== null;
 
   const scrollToBottom = useCallback(() => {
@@ -272,6 +275,7 @@ export function AmaniChatWidget({ endpoint, className }: AmaniChatWidgetProps) {
           trimmed,
           historyForApi,
           buildAmaniFormState(quotation),
+          sessionIdRef.current,
         );
         const assistantMessage = createMessage("assistant", reply, {
           premium,
